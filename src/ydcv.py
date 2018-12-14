@@ -11,6 +11,10 @@ import json
 import re
 import sys
 import platform
+import string
+import os
+import logging
+
 
 try:
     # Py3
@@ -217,13 +221,42 @@ def print_explanation(data, options):
 
     print()
 
+_file_name_chars = set(string.digits + string.ascii_letters)
 
-def lookup_word(word):
-    word = quote(word)
-    if word == '%5Cq' or word == '%3Aq':
-        sys.exit("Thanks for using, goodbye!")
-    else:
-        pass
+def make_file_name_for_word(word):
+    name_list = [c if c in _file_name_chars else '-' for c in word]
+    return ''.join(name_list)
+
+def get_data_cahce_path():
+    path = os.path.expanduser('~/.local/share/ydcv/words')
+    if not os.path.isdir(path):
+        os.makedirs(path)
+    return path
+
+def dump_formatted_data(word, data):
+    cache_path = get_data_cahce_path()
+    cache_name = os.path.join(cache_path, make_file_name_for_word(word))
+    with open(cache_name, 'w') as writer:
+        json.dump(data, writer)
+    logging.info('save cache of %s into %s' % (word, cache_name))
+
+def load_formatted_data(word):
+    if options.no_cache:
+        return None
+    cache_path = get_data_cahce_path()
+    cache_name = os.path.join(cache_path, make_file_name_for_word(word))
+    if not os.path.isfile(cache_name):
+        return None
+    with open(cache_name) as reader:
+        return json.load(reader)
+
+def get_formatted_data(word):
+
+    cache = load_formatted_data(word)
+    if not cache is None:
+        logging.info('load local cache')
+        return cache
+
     try:
         data = urlopen(
             "http://fanyi.youdao.com/openapi.do?keyfrom={0}&"
@@ -231,12 +264,26 @@ def lookup_word(word):
             .format(API, API_KEY, word)).read().decode("utf-8")
     except IOError:
         print("Network is unavailable")
-    else:
-        try:
-            formatted = json.loads(data)
-            print_explanation(formatted, options)
-        except ValueError:
-            print("Cannot parse response data, original response: \n{}".format(data))
+        return None
+
+    try:
+        formatted = json.loads(data)
+        logging.info('fetch from remote')
+        dump_formatted_data(word, formatted)
+    except ValueError:
+        print("Cannot parse response data, original response: \n{}".format(data))
+        return None
+
+    return formatted
+
+
+def lookup_word(word):
+    word = quote(word)
+    if word == '%5Cq' or word == '%3Aq':
+        sys.exit("Thanks for using, goodbye!")
+    formatted = get_formatted_data(word)
+    if not formatted is None:
+        print_explanation(formatted, options)
 
 
 def arg_parse():
@@ -281,6 +328,14 @@ def arg_parse():
                         default='auto',
                         help="colorize the output. "
                              "Default to 'auto' or can be 'never' or 'always'.")
+    parser.add_argument('--no_cache',
+                        action='store_true',
+                        default=False,
+                        help='Do not load local cache, always fetch from remote.')
+    parser.add_argument('-v', '--verbose',
+                        action='store_true',
+                        default=False,
+                        help='Print development infomation for debug.')
     parser.add_argument('words',
                         nargs='*',
                         help="words to lookup, or quoted sentences to translate.")
@@ -289,6 +344,9 @@ def arg_parse():
 
 def main():
     options._options = arg_parse()
+
+    if options.verbose:
+        logging.basicConfig(level=logging.INFO)
 
     if options.words:
         for word in options.words:
